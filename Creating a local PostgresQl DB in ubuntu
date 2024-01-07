@@ -1,4 +1,4 @@
-# Setting Up PostgreSQL Database and User with PostgreSQL on Linux
+# How to setup a PostgreSQL Database and User with PostgreSQL on Linux
 
 PostgreSQL is a powerful relational database management system used by many developers to build robust and scalable applications. When working with Postgres ensuring that your database and user are properly configured is essential. In this article, we will walk through the process of creating a PostgreSQL database, configuring user permissions, and granting privileges using PostGres.
 
