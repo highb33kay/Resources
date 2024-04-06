@@ -101,3 +101,91 @@ ref: https://aws.amazon.com/blogs/security/use-iam-roles-to-connect-github-actio
 Automating your Laravel application deployment to AWS EC2 using GitHub Actions simplifies the process, reduces the potential for human error, and ensures consistent deployments. This guide has detailed each step required to set up this automation, from preparing your AWS EC2 instance and configuring Nginx to setting up the GitHub Actions workflow and securely storing credentials. With this setup, you can focus more on development and less on the intricacies of deployment.
 
 Remember, this guide serves as a starting point. Depending on your specific project needs, consider customizing the Nginx configuration, adjusting file permissions, or enhancing the GitHub Actions workflow for a more tailored deployment process.
+
+## Sample WorkFlow:
+
+```yaml
+name: Deploy to EC
+
+on:
+  push:
+    branches:
+      - staging
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.1"
+          extensions: mbstring, intl
+
+      - name: Install Dependencies
+        run: composer install --no-ansi --no-interaction --no-scripts --no-progress --prefer-dist
+
+      - name: Copy Environment File
+        run: cp .env.example .env
+
+      - name: Generate Application Key
+        run: php artisan key:generate
+
+      - name: Create Database
+        run: |
+          mkdir -p database
+          touch database/database.sqlite
+
+      #   - name: Run Tests
+      #     run: php artisan test
+      #     env:
+      #       DB_CONNECTION: sqlite
+      #       DB_DATABASE: database/database.sqlite
+
+      - name: Laravel Pint
+        run: npm install && npm run pint
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh/
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.EC2_PUBLIC_IP }} >> ~/.ssh/known_hosts
+
+      - name: Install PHP and dependencies
+        run: sudo apt-get update && sudo apt-get install php php-mbstring php-xml
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist --optimize-autoloader
+
+      - name: Deploy to EC2
+        run: |
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.EC2_PUBLIC_IP }} 'sudo chown -R ubuntu:ubuntu /var/www/html/server'
+
+          rsync -avz --delete --exclude='.env' -e "ssh -i ~/.ssh/id_rsa" ./ ubuntu@${{ secrets.EC2_PUBLIC_IP }}:/var/www/html/server
+
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.EC2_PUBLIC_IP }} '
+          cd /var/www/html/server &&
+          composer install --no-interaction --prefer-dist --optimize-autoloader &&
+          php artisan migrate --force &&
+          php artisan config:cache &&
+          php artisan route:cache'
+
+          ssh -i ~/.ssh/id_rsa ubuntu@${{ secrets.EC2_PUBLIC_IP }} 'sudo chown -R www-data:www-data /var/www/html/server'
+
+      - name: Clear SSH key
+        run: rm ~/.ssh/id_rsa
+```
+
