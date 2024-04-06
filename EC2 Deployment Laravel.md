@@ -189,3 +189,9 @@ jobs:
         run: rm ~/.ssh/id_rsa
 ```
 
+## Ref:
+
+- https://medium.com/techvblogs/how-to-deploy-laravel-application-with-nginx-on-ubuntu-cc3ef9f39068
+- https://www.linkedin.com/pulse/set-up-github-actions-workflow-deploy-laravel-project-selvanantham/
+- https://aws.amazon.com/blogs/security/use-iam-roles-to-connect-github-actions-to-actions-in-aws/
+- https://www.digitalocean.com/community/tutorials/how-to-install-and-configure-laravel-with-nginx-on-ubuntu-20-04 
