@@ -1,4 +1,4 @@
-How to create CloudWatch alarms to monitor the health of your instances and automatically restart them if they become unhealthy.
+# How to create CloudWatch alarms to monitor the health of your instances and automatically restart them if they become unhealthy.
 
 ### Step 1: Create a Target Group
 
