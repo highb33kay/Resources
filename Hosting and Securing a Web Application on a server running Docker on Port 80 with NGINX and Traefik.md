@@ -1,170 +1,208 @@
-# Documentation: Hosting Multiple Applications with Docker and Traefik
+# Documentation: Using Traefik in Docker to Manage an Nginx Service on the Host Machine
 
-This guide details how to add a second, Nginx-based web application to an existing server setup that is already managed by Traefik. It assumes you have successfully completed the initial setup for your first application.
+This guide details how to use a Dockerized Traefik instance to act as a reverse proxy for a web application served by Nginx running directly on the host operating system.
 
 ### Table of Contents
 1.  **Prerequisites**
-2.  **Core Concept: How Traefik Manages Multiple Services**
-3.  **Step 1: Prepare and Run Your Second Application Container**
-4.  **Step 2: Configure Traefik to Route to the New Application**
-5.  **Step 3: Secure the New Application with HTTPS**
-6.  **Step 4: Final Deployment**
-7.  **Troubleshooting**
+2.  **Core Concept: How Traefik Connects to the Host**
+3.  **Step 1: Verify Your Host Nginx Setup**
+4.  **Step 2: Configure Traefik with Docker Compose**
+5.  **Step 3: Configure the Traefik Router for Nginx**
+6.  **Step 4: Securing the Nginx Service with HTTPS**
+7.  **Step 5: Launching Traefik**
+8.  **Troubleshooting**
 
 ---
 
 ### 1. Prerequisites
 
-*   A server with a working Traefik instance and at least one other application already configured, as per the previous documentation.
-*   Your new application packaged in a Docker container (we will use a standard Nginx image as an example).
-*   A new domain or subdomain (e.g., `app2.example.com`) with its DNS A record pointing to your server's IP address.
+*   A server with a public IP address.
+*   Docker and Docker Compose installed.
+*   **Nginx installed and running as a service directly on the host machine** (e.g., installed via `apt`, `yum`, etc.).
+*   Your Nginx service is configured to serve a website on a specific port (e.g., `localhost:8080`).
+*   A registered domain name (e.g., `nginx-app.example.com`) pointing to your server's public IP.
 
 ---
 
-### 2. Core Concept: How Traefik Manages Multiple Services
+### 2. Core Concept: How Traefik Connects to the Host
 
-The beauty of Traefik is that you **do not need to reconfigure Traefik itself** to add new services. Traefik *watches* for new configuration files and running containers.
+When Traefik is inside a Docker container, `localhost` or `127.0.0.1` refers to the *container itself*, not the host machine. To connect to a service running on the host, Traefik needs the host's IP address on the Docker network.
 
-Our goal is to:
-1.  Run our new Nginx application container on the same Docker network as Traefik.
-2.  Create a new, separate `.yml` file in the `traefik-conf` directory that tells Traefik how to route traffic to this new container.
+Docker creates a virtual network bridge, typically named `docker0`. By default, the host machine is accessible at the IP address of this bridge interface, which is usually `172.17.0.1`.
 
-Traefik will see the new file and the new container and automatically create the routes.
+**Our goal:** Configure a Traefik router to forward traffic for `nginx-app.example.com` to `http://172.17.0.1:8080`, where your host's Nginx is listening.
 
 ---
 
-### 3. Step 1: Prepare and Run Your Second Application Container
+### 3. Step 1: Verify Your Host Nginx Setup
 
-First, we need to define our new Nginx application in the main `docker-compose.yml` file. This tells Docker how to run it.
+Before configuring Traefik, ensure your Nginx service is working correctly.
 
-Open your `docker-compose.yml` file and add a new service for the second application.
+1.  **Configure Nginx to Listen on a High Port:** Do not let Nginx try to use ports 80 or 443, as Traefik will need those. Configure your Nginx virtual host to listen on a different port, like `8080`.
 
+    Example Nginx site config (`/etc/nginx/sites-available/my-app`):
+    ```nginx
+    server {
+        # Listen on a non-standard port
+        listen 8080;
+        listen [::]:8080;
+
+        server_name nginx-app.example.com;
+        root /var/www/my-app;
+        index index.html;
+
+        location / {
+            try_files $uri $uri/ =404;
+        }
+    }
+    ```
+    Enable the site and restart Nginx: `sudo systemctl restart nginx`.
+
+2.  **Test Locally:** From your server's command line, test that Nginx is responding on that port.
+    ```bash
+    curl http://localhost:8080
+    ```
+    This should return the HTML of your website. If it doesn't, resolve your Nginx configuration first.
+
+---
+
+### 4. Step 2: Configure Traefik with Docker Compose
+
+This is the standard Traefik setup. If you already have Traefik running, you can skip to the next step.
+
+**File:** `docker-compose.yml`
 ```yaml
-# /home/user/my_project/docker-compose.yml
-
 version: '3.8'
 
 services:
   traefik:
-    # ... your existing traefik configuration ...
-    # ... it should already be on the 'web' network ...
-    networks:
-      - web
-
-  # This is your FIRST application (example)
-  app-one:
-    image: laravel-app:latest
-    container_name: laravel-app
+    image: traefik:v2.11
+    container_name: traefik
     restart: unless-stopped
-    expose:
-      - "8080"
-    networks:
-      - web
-
-  # --- ADD THE NEW NGINX APPLICATION SERVICE BELOW ---
-  app-two-nginx:
-    image: nginx:latest # Using a standard Nginx image for this example
-    container_name: my-nginx-app
-    restart: unless-stopped
-    expose:
-      # Expose port 80 INSIDE the container. No host port mapping needed!
-      - "80"
+    ports:
+      - "80:80"
+      - "443:443"
     volumes:
-      # Optional: Mount your website's HTML files into the container
-      - ./nginx-site-files:/usr/share/nginx/html:ro
-    networks:
-      - web # CRITICAL: It must be on the same network as Traefik.
-
-networks:
-  web:
-    name: web_network
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik-conf:/etc/traefik/dynamic:ro
+      # Volume for certificates will be added in the HTTPS step
 ```
-**Key Points:**
-*   **`app-two-nginx`:** This is the service name we'll use to refer to this container.
-*   **`expose: - "80"`:** We are only exposing the port *internally* to the Docker network. We do NOT map it to the host (e.g., `ports: - "8081:80"`) because Traefik will handle all external traffic.
-*   **`networks: - web`:** This is the most critical part. The new application **must** be on the same network as Traefik so they can communicate.
+
+**File:** `traefik.yml`
+```yaml
+global:
+  checkNewVersion: false
+
+api:
+  dashboard: true
+  insecure: true # Secure this for production
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint: { to: websecure, scheme: https }
+  websecure:
+    address: ":443"
+
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+```
 
 ---
 
-### 4. Step 2: Configure Traefik to Route to the New Application
+### 5. Step 3: Configure the Traefik Router for Nginx
 
-Now, create a new dynamic configuration file just for this Nginx app. Traefik will automatically discover and load it.
+This is the key step. We will create a dynamic configuration file that tells Traefik how to find the Nginx service running on the host.
 
-**Create file:** `traefik-conf/app-two.yml`
-
+**Create file:** `traefik-conf/host-nginx-app.yml`
 ```yaml
-# /home/user/my_project/traefik-conf/app-two.yml
+# /home/user/my_project/traefik-conf/host-nginx-app.yml
 
 http:
   routers:
-    # A unique name for the new router
-    nginx-app-router:
-      rule: "Host(`app2.example.com`)" # The domain for this new app
+    # A unique name for this router
+    nginx-host-router:
+      rule: "Host(`nginx-app.example.com`)"
       entryPoints: ["websecure"]
-      service: "nginx-app-service"
-      tls: {}
+      service: "nginx-host-service"
+      tls: {} # Enable TLS
 
   services:
-    # A unique name for the new service
-    nginx-app-service:
+    # A unique name for this service
+    nginx-host-service:
       loadBalancer:
         servers:
-          # Point to the container by its service name and internal port
-          - url: "http://app-two-nginx:80"
+          # IMPORTANT: Point to the Docker host's gateway IP and port
+          - url: "http://172.17.0.1:8080"
 ```
-**Key Points:**
-*   **`rule: "Host(...)`:** This defines the domain that will route to this container.
-*   **`url: "http://app-two-nginx:80"`:** This is the "magic" of Docker networking. We use the *service name* from `docker-compose.yml` (`app-two-nginx`) and the port it exposes internally (`80`). Traefik will resolve this to the container's internal IP address. This is more robust than using a hardcoded IP.
+**To find your Docker host gateway IP:**
+If `172.17.0.1` doesn't work, run `ip addr show docker0` on your host machine and use the `inet` address you see.
 
 ---
 
-### 5. Step 3: Secure the New Application with HTTPS
+### 6. Step 4: Securing the Nginx Service with HTTPS
 
-Just like before, you need an SSL certificate for `app2.example.com`.
+You need an SSL certificate for `nginx-app.example.com`.
 
 **A. Obtain the Certificate**
-On your host machine, run Certbot for the new domain:
+Use Certbot on your host machine:
 ```bash
-sudo certbot certonly --manual --preferred-challenges=dns -d app2.example.com
+sudo certbot certonly --manual --preferred-challenges=dns -d nginx-app.example.com
 ```
-Complete the DNS validation process.
+Complete the DNS validation. Your files will be in `/etc/letsencrypt/live/nginx-app.example.com/`.
 
-**B. Update the TLS Configuration**
-Edit your **existing** `traefik-conf/tls.yml` file and **add** the new certificate to the list.
-
+**B. Mount the Certificates into Traefik**
+Edit `docker-compose.yml` and add the certificate volume:
 ```yaml
-# /home/user/my_project/traefik-conf/tls.yml
+# docker-compose.yml
+services:
+  traefik:
+    # ... other config ...
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik-conf:/etc/traefik/dynamic:ro
+      - /etc/letsencrypt:/etc/certs:ro # <-- ADD THIS LINE
+```
+
+**C. Create the TLS Configuration**
+Create a file to tell Traefik about your certificate. If you already have this file, just add the new certificate to it.
+
+**File:** `traefik-conf/tls.yml`
+```yaml
+# traefik-conf/tls.yml
 tls:
   certificates:
-    # --- Your FIRST certificate ---
-    - certFile: /etc/certs/live/app.example.com/fullchain.pem
-      keyFile: /etc/certs/live/app.example.com/privkey.pem
-      
-    # --- ADD THE NEW certificate for the second app ---
-    - certFile: /etc/certs/live/app2.example.com/fullchain.pem
-      keyFile: /etc/certs/live/app2.example.com/privkey.pem
+    - certFile: /etc/certs/live/nginx-app.example.com/fullchain.pem
+      keyFile: /etc/certs/live/nginx-app.example.com/privkey.pem
 ```
-Traefik will load all certificates from this list and automatically use the correct one based on the `Host()` rule in each router.
 
 ---
 
-### 6. Step 4: Final Deployment
+### 7. Step 5: Launching Traefik
 
-Now that all the configuration is in place, go to your project directory and run Docker Compose. It will start your new Nginx container and Traefik will automatically configure the routing.
+With all the configuration in place, start the Traefik container.
 
 ```bash
-cd /home/user/my_project/
+cd /path/to/your/project
 docker-compose up -d
 ```
-
-Your new application should now be live and accessible at `https://app2.example.com`.
+Traefik will start, read its configuration files, and begin routing traffic for `https://nginx-app.example.com` to your Nginx service running on `localhost:8080`.
 
 ---
 
-### 7. Troubleshooting
+### 8. Troubleshooting
 
-*   **404 Not Found:** Check for typos in your `app-two.yml` file (`http`, `Host()`, etc.). Verify the new router appears in the Traefik Dashboard.
-*   **502 Bad Gateway:** Traefik can't connect to your Nginx container.
-    1.  Confirm both Traefik and `app-two-nginx` are on the `web_network`. Run `docker network inspect web_network` to see which containers are attached.
-    2.  Check that the service name in the `url` (`http://app-two-nginx:80`) exactly matches the service name in `docker-compose.yml`.
-    3.  Check the logs of your Nginx container (`docker-compose logs app-two-nginx`) to ensure it started correctly.
+*   **502 Bad Gateway:** This is the most common error in this setup. It means Traefik cannot reach your Nginx service.
+    1.  **Check the IP:** Is `172.17.0.1` correct? Verify with `ip addr show docker0`.
+    2.  **Check the Port:** Is Nginx on the host listening on the correct port (`8080` in this example)? Use `ss -tulpn | grep 8080`.
+    3.  **Check Firewall:** Is a host firewall (like `ufw`) blocking traffic from the Docker network (`172.17.0.0/16`) to port 8080? You may need to add an allow rule.
+
+*   **404 Not Found:** Traefik is not recognizing the router.
+    *   Check for typos in `traefik-conf/host-nginx-app.yml` (especially `http:` and the `Host()` rule).
+    *   Check the Traefik Dashboard (`http://<your_ip>:8080`) to see if the router is listed and active.
