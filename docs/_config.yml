@@ -9,7 +9,7 @@ baseurl: "/Resources"   # change to your repo name
 # url: "https://highb33kay.github.io"
 # baseurl: ""
 
-theme: minima
+theme: jekyll-theme-cayman
 
 minima:
   social_links:
