@@ -3,7 +3,7 @@ description: "A curated collection of articles, notes, and references from my wo
 
 # If this is a *project* site, e.g. github.com/highb33kay/resources
 url: "https://highb33kay.github.io"
-baseurl: "/resources"   # change to your repo name
+baseurl: "/Resources"   # change to your repo name
 
 # If instead you create highb33kay.github.io as the repo, use:
 # url: "https://highb33kay.github.io"
